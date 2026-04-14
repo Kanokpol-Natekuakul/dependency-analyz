@@ -1,10 +1,10 @@
 {
-  "name": "dependency-analyzer",
-  "version": "1.0.0",
+  "name": "dependency-analyzer-p",
+  "version": "1.0.1",
   "description": "Scan codebase and visualize file dependency graph with AST precision.",
   "main": "cli.js",
   "bin": {
-    "dep-analyze": "./cli.js"
+    "dep-analyze": "cli.js"
   },
   "keywords": [
     "dependency",

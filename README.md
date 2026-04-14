@@ -4,7 +4,7 @@
 
 **A lightning-fast, highly accurate CLI tool to analyze your codebase's dependencies, detect dead files, spot circular imports, and generate beautiful interactive graphs.**
 
-[![npm version](https://img.shields.io/npm/v/dependency-analyzer.svg?style=flat-square)](https://www.npmjs.com/package/dependency-analyzer)
+[![npm version](https://img.shields.io/npm/v/dependency-analyzer-p.svg?style=flat-square)](https://www.npmjs.com/package/dependency-analyzer-p)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 [![Node.js CI](https://img.shields.io/badge/Node.js-%3E%3D14.0.0-brightgreen.svg?style=flat-square)](https://nodejs.org/)
 
@@ -44,10 +44,10 @@ Install it globally to use anywhere, or run it directly via `npx` in your projec
 
 ```bash
 # Global install
-npm install -g dependency-analyzer
+npm install -g dependency-analyzer-p
 
 # Or install as a devDependency in your project
-npm install -D dependency-analyzer
+npm install -D dependency-analyzer-p
 ```
 
 ---
