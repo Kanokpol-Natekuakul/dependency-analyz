@@ -1,11 +1,23 @@
 {
   "name": "dependency-analyzer",
   "version": "1.0.0",
-  "description": "Scan codebase and visualize file dependency graph",
+  "description": "Scan codebase and visualize file dependency graph with AST precision.",
   "main": "cli.js",
   "bin": {
     "dep-analyze": "./cli.js"
   },
+  "keywords": [
+    "dependency",
+    "analyzer",
+    "cli",
+    "ast",
+    "graph",
+    "circular-dependencies",
+    "orphan",
+    "d3"
+  ],
+  "author": "Kanokpol Natekuakul",
+  "license": "MIT",
   "scripts": {
     "start": "node cli.js"
   },
