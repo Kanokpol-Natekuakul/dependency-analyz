@@ -1,0 +1,20 @@
+graph TD;
+    index_js["index.js"]
+    alias_test_js["alias-test.js"]
+    utils_unused_js["utils/unused.js"]
+    utils_math_js["utils/math.js"]
+    utils_helpers_js["utils/helpers.js"]
+    utils_date_js["utils/date.js"]
+    utils_circular_b_js["utils/circular-b.js"]
+    utils_circular_a_js["utils/circular-a.js"]
+    components_styles_js["components/styles.js"]
+    components_Button_js["components/Button.js"]
+    index_js --> utils_math_js
+    index_js --> utils_date_js
+    index_js --> components_Button_js
+    alias_test_js --> utils_math_js
+    alias_test_js --> utils_unused_js
+    utils_date_js --> utils_helpers_js
+    utils_circular_b_js --> utils_circular_a_js
+    utils_circular_a_js --> utils_circular_b_js
+    components_Button_js --> components_styles_js

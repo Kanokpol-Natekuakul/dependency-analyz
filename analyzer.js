@@ -1,14 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const { glob } = require('glob');
+const parser = require('@babel/parser');
+const traverse = require('@babel/traverse').default;
 
-// Regex patterns per language
+// Fallback Regex for Python
 const PATTERNS = {
-  js: [
-    /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g,
-    /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-    /import\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
-  ],
   py: [
     /^from\s+(\.+[\w./]*)\s+import/gm,
     /^import\s+([\w./]+)/gm,
@@ -21,14 +18,65 @@ const EXT_MAP = {
   '.py': 'py',
 };
 
-/**
- * Resolve a relative import path to an absolute file path
- */
-function resolveImport(fromFile, importPath, allFiles) {
-  if (!importPath.startsWith('.')) return null; // skip node_modules / stdlib
+// Parse mapping from tsconfig.json/jsconfig.json
+function loadAliases(rootDir) {
+  let aliases = [];
+  const configs = ['tsconfig.json', 'jsconfig.json'];
+  for (const conf of configs) {
+    const configPath = path.join(rootDir, conf);
+    if (fs.existsSync(configPath)) {
+      try {
+        // Read file, strip simple comments
+        const content = fs.readFileSync(configPath, 'utf-8').replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+        const json = JSON.parse(content);
+        if (json.compilerOptions && json.compilerOptions.paths) {
+          const paths = json.compilerOptions.paths;
+          const baseUrl = json.compilerOptions.baseUrl || '.';
+          for (const [key, values] of Object.entries(paths)) {
+            if (values.length > 0) {
+              // Convert `@/*` to `^@/(.*)` and `src/$1`
+              const regexRaw = key.replace(/\*/g, '(.*)');
+              const regex = new RegExp(`^${regexRaw}$`);
+              const targetStr = values[0].replace(/\*/g, '$1');
+              const target = path.join(rootDir, baseUrl, targetStr).replace(/\\/g, '/');
+              aliases.push({ regex, target });
+            }
+          }
+        }
+        break; // Use the first found config
+      } catch (e) {
+        console.warn(`\n⚠  Could not parse ${conf}: ${e.message}`);
+      }
+    }
+  }
+  return aliases;
+}
 
-  const dir = path.dirname(fromFile);
-  const base = path.resolve(dir, importPath);
+/**
+ * Resolve an import path to an absolute file path
+ */
+function resolveImport(fromFile, importPath, allFiles, aliases) {
+  let base = null;
+
+  // 1. Check path aliases first
+  for (const alias of aliases) {
+    if (alias.regex.test(importPath)) {
+      base = importPath.replace(alias.regex, alias.target);
+      break;
+    }
+  }
+
+  // 2. Relative paths
+  if (!base && importPath.startsWith('.')) {
+    const dir = path.dirname(fromFile);
+    base = path.resolve(dir, importPath);
+  }
+
+  // 3. Node modules / external - skip
+  if (!base) return null;
+
+  // normalize slash
+  base = base.replace(/\\/g, '/');
 
   // Try exact match first, then with extensions
   const candidates = [
@@ -47,21 +95,67 @@ function resolveImport(fromFile, importPath, allFiles) {
 }
 
 /**
- * Extract all local imports from a file
+ * Extract all local imports using AST for JS/TS, Regex for Python
  */
 function extractImports(filePath, content) {
   const ext = path.extname(filePath).toLowerCase();
   const lang = EXT_MAP[ext];
   if (!lang) return [];
 
-  const patterns = PATTERNS[lang];
   const imports = new Set();
 
-  for (const regex of patterns) {
-    let match;
-    const re = new RegExp(regex.source, regex.flags);
-    while ((match = re.exec(content)) !== null) {
-      imports.add(match[1]);
+  if (lang === 'js') {
+    try {
+      const ast = parser.parse(content, {
+        sourceType: 'unambiguous',
+        plugins: ['jsx', 'typescript', 'decorators-legacy'],
+      });
+
+      traverse(ast, {
+        ImportDeclaration(p) {
+          if (p.node.source && p.node.source.value) {
+            imports.add(p.node.source.value);
+          }
+        },
+        CallExpression(p) {
+          const callee = p.node.callee;
+          // require('...')
+          if (callee.type === 'Identifier' && callee.name === 'require') {
+            const args = p.node.arguments;
+            if (args.length > 0 && args[0].type === 'StringLiteral') {
+              imports.add(args[0].value);
+            }
+          }
+          // import('...')
+          else if (callee.type === 'Import') {
+            const args = p.node.arguments;
+            if (args.length > 0 && args[0].type === 'StringLiteral') {
+              imports.add(args[0].value);
+            }
+          }
+        },
+        ExportNamedDeclaration(p) {
+          if (p.node.source && p.node.source.value) {
+            imports.add(p.node.source.value);
+          }
+        },
+        ExportAllDeclaration(p) {
+          if (p.node.source && p.node.source.value) {
+            imports.add(p.node.source.value);
+          }
+        }
+      });
+    } catch (e) {
+      // Syntax errors ignored, let the program continue
+    }
+  } else if (lang === 'py') {
+    const patterns = PATTERNS.py;
+    for (const regex of patterns) {
+      let match;
+      const re = new RegExp(regex.source, regex.flags);
+      while ((match = re.exec(content)) !== null) {
+        imports.add(match[1]);
+      }
     }
   }
 
@@ -70,7 +164,6 @@ function extractImports(filePath, content) {
 
 /**
  * Scan a directory and build the dependency map
- * Returns: { files: Set, deps: Map<file, Set<file>>, errors: [] }
  */
 async function analyze(rootDir, options = {}) {
   const { extensions = Object.keys(EXT_MAP), ignore = ['**/node_modules/**', '**/.git/**', '**/dist/**', '**/build/**'] } = options;
@@ -81,6 +174,7 @@ async function analyze(rootDir, options = {}) {
 
   const deps = new Map();   // file -> Set of files it imports
   const errors = [];
+  const aliases = loadAliases(rootDir);
 
   for (const file of files) {
     deps.set(file, new Set());
@@ -94,7 +188,7 @@ async function analyze(rootDir, options = {}) {
 
     const imports = extractImports(file, content);
     for (const imp of imports) {
-      const resolved = resolveImport(file, imp, files);
+      const resolved = resolveImport(file, imp, files, aliases);
       if (resolved) deps.get(file).add(resolved);
     }
   }
