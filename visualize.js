@@ -115,7 +115,6 @@ function renderList(filter = '') {
     });
 }
 renderList();
-document.getElementById('search').addEventListener('input', e => renderList(e.target.value));
 
 // Graph
 const svg = d3.select('#svg');
@@ -164,6 +163,23 @@ sim.on('tick', () => {
   link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
   node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
+});
+
+// Search Highlighting
+document.getElementById('search').addEventListener('input', e => {
+  const term = e.target.value.toLowerCase();
+  renderList(term);
+  
+  if (!term) {
+    node.style('opacity', 1);
+    link.style('opacity', 1);
+    return;
+  }
+  
+  node.style('opacity', d => d.id.toLowerCase().includes(term) ? 1 : 0.15);
+  link.style('opacity', d => 
+    (d.source.id.toLowerCase().includes(term) || d.target.id.toLowerCase().includes(term)) ? 0.4 : 0.05
+  );
 });
 </script>
 </body>
