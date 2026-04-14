@@ -26,7 +26,11 @@ function generateHTML(graphData, unusedFiles, cycles, statsData, outputPath) {
     ...cycles.filter(c => !entrySet.has(c.file) && !orphanSet.has(c.file) && !unusedSet.has(c.file)).map(u => ({ ...u, isEntry: false, isOrphan: false, isCycle: true }))
   ];
 
-  const payload = JSON.stringify({ nodes: enrichedNodes, links, stats: statsData, list: combinedUnused, cyclesCount: cycles.length });
+  // Secure payload injection against XSS (e.g. if a filename contains script tags)
+  const payload = JSON.stringify({ nodes: enrichedNodes, links, stats: statsData, list: combinedUnused, cyclesCount: cycles.length })
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
 
   const html = `<!DOCTYPE html>
 <html lang="en">
