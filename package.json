@@ -10,7 +10,10 @@
     "start": "node cli.js"
   },
   "dependencies": {
-    "glob": "^10.3.10",
-    "commander": "^11.1.0"
+    "@babel/parser": "^7.29.2",
+    "@babel/traverse": "^7.29.0",
+    "chokidar": "^5.0.0",
+    "commander": "^11.1.0",
+    "glob": "^10.3.10"
   }
 }

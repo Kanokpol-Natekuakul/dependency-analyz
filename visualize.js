@@ -4,19 +4,33 @@ const path = require('path');
 /**
  * Generate a self-contained HTML file with interactive D3 force graph
  */
-function generateHTML(graphData, unusedFiles, statsData, outputPath) {
+function generateHTML(graphData, unusedFiles, cycles, statsData, outputPath) {
   const { nodes, links } = graphData;
 
-  // Mark unused nodes
-  const unusedSet = new Set(unusedFiles.filter(u => !u.isEntry).map(u => u.file));
-  const entrySet = new Set(unusedFiles.filter(u => u.isEntry).map(u => u.file));
+  const unusedSet = new Set(unusedFiles.unused.map(u => u.file));
+  const entrySet = new Set(unusedFiles.entries.map(u => u.file));
+  const orphanSet = new Set(unusedFiles.orphans.map(u => u.file));
+  const cycleSet = new Set(cycles.map(u => u.file));
 
+  // Cycle takes precedence over normal, orphan. Unused/Entry overrides Cycle.
   const enrichedNodes = nodes.map(n => ({
     ...n,
-    type: entrySet.has(n.id) ? 'entry' : unusedSet.has(n.id) ? 'unused' : 'normal',
+    type: entrySet.has(n.id) ? 'entry' : unusedSet.has(n.id) ? 'unused' : cycleSet.has(n.id) ? 'cycle' : orphanSet.has(n.id) ? 'orphan' : 'normal',
   }));
 
-  const payload = JSON.stringify({ nodes: enrichedNodes, links, stats: statsData, unused: unusedFiles });
+  const combinedUnused = [
+    ...unusedFiles.entries.map(u => ({ ...u, isEntry: true, isOrphan: false, isCycle: cycleSet.has(u.file) })),
+    ...unusedFiles.orphans.map(u => ({ ...u, isEntry: false, isOrphan: true, isCycle: cycleSet.has(u.file) })),
+    ...unusedFiles.unused.map(u => ({ ...u, isEntry: false, isOrphan: false, isCycle: cycleSet.has(u.file) })),
+    // those in cycles but not in the above sets
+    ...cycles.filter(c => !entrySet.has(c.file) && !orphanSet.has(c.file) && !unusedSet.has(c.file)).map(u => ({ ...u, isEntry: false, isOrphan: false, isCycle: true }))
+  ];
+
+  // Secure payload injection against XSS (e.g. if a filename contains script tags)
+  const payload = JSON.stringify({ nodes: enrichedNodes, links, stats: statsData, list: combinedUnused, cyclesCount: cycles.length })
+    .replace(/</g, '\\u003c')
+    .replace(/>/g, '\\u003e')
+    .replace(/&/g, '\\u0026');
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -31,9 +45,11 @@ function generateHTML(graphData, unusedFiles, statsData, outputPath) {
   .stat { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #2d3148; font-size: 13px; }
   .stat span:last-child { color: #7c85f3; font-weight: bold; }
   #unused-list { margin-top: 8px; }
-  .unused-item { font-size: 11px; padding: 4px 6px; margin: 3px 0; border-radius: 4px; word-break: break-all; }
-  .unused-item.unused { background: #3d1a1a; color: #f87171; }
-  .unused-item.entry { background: #1a2d1a; color: #86efac; }
+  .list-item { font-size: 11px; padding: 4px 6px; margin: 3px 0; border-radius: 4px; word-break: break-all; }
+  .list-item.unused { background: #3d1a1a; color: #f87171; }
+  .list-item.orphan { background: #3d2a1a; color: #fb923c; }
+  .list-item.entry { background: #1a2d1a; color: #86efac; }
+  .list-item.cycle { background: #2f1d40; color: #d8b4fe; }
   #canvas { flex: 1; position: relative; }
   svg { width: 100%; height: 100%; }
   .link { stroke: #3d4268; stroke-opacity: 0.6; stroke-width: 1px; marker-end: url(#arrow); }
@@ -41,6 +57,8 @@ function generateHTML(graphData, unusedFiles, statsData, outputPath) {
   .node.normal circle { fill: #4f6ef7; stroke: #7c9bff; }
   .node.entry circle { fill: #22c55e; stroke: #86efac; }
   .node.unused circle { fill: #ef4444; stroke: #fca5a5; }
+  .node.orphan circle { fill: #f97316; stroke: #fdba74; }
+  .node.cycle circle { fill: #a855f7; stroke: #d8b4fe; }
   .node text { font-size: 9px; fill: #cbd5e1; pointer-events: none; }
   .node:hover circle { stroke-width: 3px; }
   #tooltip { position: absolute; background: #1a1d27; border: 1px solid #4f6ef7; border-radius: 6px; padding: 8px 12px; font-size: 12px; pointer-events: none; display: none; max-width: 300px; word-break: break-all; }
@@ -55,10 +73,11 @@ function generateHTML(graphData, unusedFiles, statsData, outputPath) {
   <h2>Stats</h2>
   <div class="stat"><span>Total Files</span><span id="s-files"></span></div>
   <div class="stat"><span>Total Edges</span><span id="s-edges"></span></div>
+  <div class="stat"><span>Cyclic Files</span><span id="s-cycles"></span></div>
   <div class="stat"><span>Unused Files</span><span id="s-unused"></span></div>
-  <div class="stat"><span>Most Deps</span><span id="s-max"></span></div>
+  <div class="stat"><span>Orphan Modules</span><span id="s-orphans"></span></div>
   <br>
-  <h2>Unused / Entry Files</h2>
+  <h2>Special Files</h2>
   <input id="search" type="text" placeholder="Search files...">
   <div id="unused-list"></div>
 </div>
@@ -68,6 +87,8 @@ function generateHTML(graphData, unusedFiles, statsData, outputPath) {
   <div id="legend">
     <div class="legend-item"><div class="dot" style="background:#4f6ef7"></div> Normal</div>
     <div class="legend-item"><div class="dot" style="background:#22c55e"></div> Entry point</div>
+    <div class="legend-item"><div class="dot" style="background:#a855f7"></div> Cyclic/Cycle</div>
+    <div class="legend-item"><div class="dot" style="background:#f97316"></div> Orphan Module</div>
     <div class="legend-item"><div class="dot" style="background:#ef4444"></div> Unused</div>
   </div>
 </div>
@@ -75,28 +96,29 @@ function generateHTML(graphData, unusedFiles, statsData, outputPath) {
 <script>
 const DATA = ${payload};
 
+window.DATA = DATA;
 // Stats
 document.getElementById('s-files').textContent = DATA.stats.totalFiles;
 document.getElementById('s-edges').textContent = DATA.stats.totalEdges;
-document.getElementById('s-unused').textContent = DATA.unused.filter(u => !u.isEntry).length;
-document.getElementById('s-max').textContent = DATA.stats.maxDeps;
+document.getElementById('s-cycles').textContent = DATA.cyclesCount;
+document.getElementById('s-unused').textContent = DATA.list.filter(u => !u.isEntry && !u.isOrphan && !u.isCycle).length;
+document.getElementById('s-orphans').textContent = DATA.list.filter(u => u.isOrphan).length;
 
-// Unused list
+// List
 const list = document.getElementById('unused-list');
 function renderList(filter = '') {
   list.innerHTML = '';
-  DATA.unused
+  DATA.list
     .filter(u => u.file.toLowerCase().includes(filter.toLowerCase()))
     .forEach(u => {
       const div = document.createElement('div');
-      div.className = 'unused-item ' + (u.isEntry ? 'entry' : 'unused');
-      div.textContent = (u.isEntry ? '⚡ ' : '⚠ ') + u.file;
-      div.title = u.isEntry ? 'Entry point (no incoming imports)' : 'Unused file';
+      const cls = u.isEntry ? 'entry' : u.isCycle ? 'cycle' : u.isOrphan ? 'orphan' : 'unused';
+      div.className = 'list-item ' + cls;
+      div.textContent = (u.isEntry ? '⚡ ' : u.isCycle ? '🔄 ' : u.isOrphan ? '⚠ ' : '🗑 ') + u.file;
       list.appendChild(div);
     });
 }
 renderList();
-document.getElementById('search').addEventListener('input', e => renderList(e.target.value));
 
 // Graph
 const svg = d3.select('#svg');
@@ -146,6 +168,23 @@ sim.on('tick', () => {
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
   node.attr('transform', d => \`translate(\${d.x},\${d.y})\`);
 });
+
+// Search Highlighting
+document.getElementById('search').addEventListener('input', e => {
+  const term = e.target.value.toLowerCase();
+  renderList(term);
+  
+  if (!term) {
+    node.style('opacity', 1);
+    link.style('opacity', 1);
+    return;
+  }
+  
+  node.style('opacity', d => d.id.toLowerCase().includes(term) ? 1 : 0.15);
+  link.style('opacity', d => 
+    (d.source.id.toLowerCase().includes(term) || d.target.id.toLowerCase().includes(term)) ? 0.4 : 0.05
+  );
+});
 </script>
 </body>
 </html>`;
@@ -154,4 +193,42 @@ sim.on('tick', () => {
   return outputPath;
 }
 
-module.exports = { generateHTML };
+/**
+ * Generate JSON output
+ */
+function generateJSON(graphData, unusedFiles, cycles, statsData, outputPath) {
+  const payload = {
+    stats: statsData,
+    nodes: graphData.nodes,
+    links: graphData.links,
+    entries: unusedFiles.entries,
+    unused: unusedFiles.unused,
+    orphans: unusedFiles.orphans,
+    cycles: cycles
+  };
+  fs.writeFileSync(outputPath, JSON.stringify(payload, null, 2), 'utf-8');
+  return outputPath;
+}
+
+/**
+ * Generate Mermaid JS code
+ */
+function generateMermaid(graphData, outputPath) {
+  let mermaid = "graph TD;\n";
+  const { nodes, links } = graphData;
+  
+  const safeId = (id) => id.replace(/[^a-zA-Z0-9]/g, '_');
+  
+  for (const node of nodes) {
+    mermaid += `    ${safeId(node.id)}["${node.id}"]\n`;
+  }
+  
+  for (const link of links) {
+    mermaid += `    ${safeId(link.source)} --> ${safeId(link.target)}\n`;
+  }
+  
+  fs.writeFileSync(outputPath, mermaid, 'utf-8');
+  return outputPath;
+}
+
+module.exports = { generateHTML, generateJSON, generateMermaid };
